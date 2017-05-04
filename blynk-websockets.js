@@ -35,7 +35,7 @@ module.exports = function(RED) {
         command.typeString = getStringByCommandCode(dataview.getInt8(0));
         command.msgId = dataview.getUint16(1);
 
-        if (command.type == MsgType.HARDWARE) {
+        if (command.type == MsgType.HW) {
             command.len = dataview.getUint16(3);;
 
             command.body = '';
@@ -83,48 +83,77 @@ module.exports = function(RED) {
 
 
     var MsgType = {
-        RESPONSE: 0,
-        LOGIN: 2,
-        PING: 6,
-        TWEET: 12,
-        EMAIL: 13,
-        NOTIFY: 14,
-        BRIDGE: 15,
-        HW_SYNC: 16,
-        HW_INFO: 17,
-        HARDWARE: 20
+        RSP           :  0,
+        REGISTER      :  1, //"mail pass"
+        LOGIN         :  2, //"token" or "mail pass"
+        SAVE_PROF     :  3,
+        LOAD_PROF     :  4,
+        GET_TOKEN     :  5,
+        PING          :  6,
+        ACTIVATE      :  7, //"DASH_ID"
+        DEACTIVATE    :  8, //
+        REFRESH       :  9, //"refreshToken DASH_ID"
+        GET_GRAPH_DATA : 10,
+        GET_GRAPH_DATA_RESPONSE : 11,
+        
+        TWEET         :  12,
+        EMAIL         :  13,
+        NOTIFY        :  14,
+        BRIDGE        :  15,
+        HW_SYNC       :  16,
+        INTERNAL      :  17,
+        SMS           :  18,
+        PROPERTY      :  19,
+        HW            :  20,
+        CREATE_DASH   :  21,
+        
+        SAVE_DASH     :  22,
+        DELETE_DASH   :  23,
+        LOAD_PROF_GZ  :  24,
+        SYNC          :  25,
+        SHARING       :  26,
+        ADD_PUSH_TOKEN : 27,
+
+        //sharing commands
+        GET_SHARED_DASH     : 29,
+        GET_SHARE_TOKEN     : 30,
+        REFRESH_SHARE_TOKEN : 31,
+        SHARE_LOGIN         : 32,
+      
+        REDIRECT      :  41,
+        DEBUG_PRINT   :  55
     };
+    
+
 
     var MsgStatus = {
         OK: 200,
+        QUOTA_LIMIT_EXCEPTION : 1,
         ILLEGAL_COMMAND: 2,
-        NO_ACTIVE_DASHBOARD: 8,
+        NOT_REGISTERED : 3,
+        ALREADY_REGISTERED    :  4,
+        NOT_AUTHENTICATED      : 5,
+        NOT_ALLOWED            : 6,
+        DEVICE_NOT_IN_NETWORK : 7,
+        NO_ACTIVE_DASHBOARD: 8, // to delete?? not in JS library
         INVALID_TOKEN: 9,
-        ILLEGAL_COMMAND_BODY: 11
+        ILLEGAL_COMMAND_BODY: 11 //to delete ?? not in JS library
     };
-
+    
+    function getKeyByValue(object, value) {
+        return Object.keys(object).find(key => object[key] === value);
+    }
+    
     function getStringByCommandCode(cmd) {
-        switch (cmd) {
-            case 0:
-                return "RESPONSE";
-            case 20:
-                return "HARDWARE";
-        }
+        var key = getKeyByValue(MsgType, cmd);
+        if(key !== undefined ) return key;
+        else return cmd;
     }
 
     function getStatusByCode(statusCode) {
-        switch (statusCode) {
-            case 200:
-                return "OK";
-            case 2:
-                return "ILLEGAL_COMMAND";
-            case 8:
-                return "NO_ACTIVE_DASHBOARD";
-            case 9:
-                return "INVALID_TOKEN";
-            case 11:
-                return "ILLEGAL_COMMAND_BODY";
-        }
+        var key = getKeyByValue(MsgStatus, statusCode);
+        if(key !== undefined ) return key;
+        else return statusCode; 
     }
     //END BLYNK STUFF
 
@@ -134,34 +163,52 @@ module.exports = function(RED) {
     function BlynkClientNode(n) {
         // Create a RED node
         RED.nodes.createNode(this, n);
-        var node = this;
-        node.msg_callbacks = [];
+       // var node = this;
+        this.msg_callbacks = [];
         // Store local copies of the node configuration (as defined in the .html)
-        node.path = n.path;
-        node.key = n.key;
+        this.path = n.path;
+        this.key = n.key;
+        this.dbg_all = n.dbg_all;
+        this.dbg_read = n.dbg_read;
+        this.dbg_write = n.dbg_write;
+        this.dbg_notify = n.dbg_notify;
+        this.dbg_mail = n.dbg_mail;
+        this.dbg_prop = n.dbg_prop;
 
-        node._inputNodes = []; // collection of nodes that want to receive events
-        node._clients = {};
+        this._inputNodes = []; // collection of nodes that want to receive events
+        this._clients = {};
         // match absolute url
-        node.closing = false;
-        node.logged = false;
+        this.closing = false;
+        this.logged = false;
 
-        node.setMaxListeners(100);
+        this.setMaxListeners(100);
 
-        node.pinger = setInterval(function() {
+        this.pinger = setInterval(function() {
             //only ping if connected and working
-            if (node.logged) {
-                node.ping();
+            if (this.logged) {
+                this.ping();
             }
         }, 5000);
 
-        node.closing = false;
+        this.closing = false;
+        
+        var node = this;
 
         function startconn() { // Connect to remote endpoint
             //should not start connection if no server or key
-            node.log(RED._("Start connection: ") + node.path);
+            //node.log(RED._("Start connection: ") + node.path);
             node.logged = false;
-            var socket = new ws(node.path);
+            if (node.path.startsWith("wss://")) {
+                node.log(RED._("Start secure connection: ") + node.path);
+                var socket = new ws(node.path, {
+                    protocolVersion: 8,
+                    rejectUnauthorized: false
+                  });
+            }
+            else {
+                node.log(RED._("Start connection: ") + node.path);
+                var socket = new ws(node.path);
+            }
             node.server = socket; // keep for closing
             socket.setMaxListeners(100);
 
@@ -182,17 +229,18 @@ module.exports = function(RED) {
             });
 
             socket.on('message', function(data, flags) {
+                //node.log(RED._("RCV: ") + messageToDebugString(data));
                 var cmd = decodeCommand(data);
-                if (cmd.type == MsgType.RESPONSE && cmd.msgId && cmd.msgId <= node.msg_callbacks.length) {
+                if (cmd.type == MsgType.RSP && cmd.msgId && cmd.msgId <= node.msg_callbacks.length) {
                     var err = null
                     if (cmd.status != MsgStatus.OK) {
-                        err = cmd.status
+                        err = cmd.status;
                     }
-                    node.msg_callbacks[cmd.msgId - 1](cmd, err)
+                    node.msg_callbacks[cmd.msgId - 1](cmd, err);
                     node.msg_callbacks.splice(cmd.msgId - 1, 1);
                 } else {
                     switch (cmd.type) {
-                        case MsgType.HARDWARE:
+                        case MsgType.HW:
                             switch (cmd.operation) {
                                 //input nodes
                                 case 'vw':
@@ -203,6 +251,11 @@ module.exports = function(RED) {
                                     break;
                                 default:
                                     node.warn(RED._("Unhandled HARDWARE operation: ") + messageToDebugString(data));
+                            }
+                            break;
+                        case MsgType.RSP:
+                            if(cmd.status != MsgStatus.OK ){  
+                                node.warn(RED._("Unhandled RSP type: ") + messageToDebugString(data));
                             }
                             break;
                         default:
@@ -241,52 +294,92 @@ module.exports = function(RED) {
     RED.nodes.registerType("blynk-websockets-client", BlynkClientNode);
 
     BlynkClientNode.prototype.registerInputNode = function( /*Node*/ handler) {
-        this.log(RED._("Register input node"));
+        this.log("Register input node" + " - type: " + handler.nodeType + " pin: " + handler.pin);
         this._inputNodes.push(handler);
-    }
+    };
 
     BlynkClientNode.prototype.removeInputNode = function( /*Node*/ handler) {
-        this.log(RED._("Remove input node"));
+        this.log("Remove input node" + " - type: " + handler.nodeType + " pin: " + handler.pin);
         this._inputNodes.forEach(function(node, i, inputNodes) {
             if (node === handler) {
                 inputNodes.splice(i, 1);
             }
         });
-    }
+    };
 
     BlynkClientNode.prototype.send_msg = function(command, data, callback) {
-        var id = 0
+        var id = 0;
         if (callback) {
             id = this.msg_callbacks.push(callback);
         }
         this.server.send(encodeCommand(command, id, data));
-    }
+    };
 
     BlynkClientNode.prototype.login = function(token) {
+        if(this.dbg_all){
+            this.log("login -> " + token);
+        }
         this.send_msg(MsgType.LOGIN, token, function(cmd, err) {
-            this.log(RED._("Client logged"));
+            this.log("Client logged");
             if (!err) {
                 this.logged = true;
                 this.emit('connected', '');
             }
         }.bind(this));
-    }
+    };
 
     BlynkClientNode.prototype.ping = function() {
+        if(this.dbg_all){
+            this.log("ping");
+        }
         this.send_msg(MsgType.PING, '', function(cmd, err) {});
-    }
+    };
 
     BlynkClientNode.prototype.virtualWrite = function(vpin, val) {
-        var values = ['vw', vpin, val];
+        var values = ['vw', vpin];
+        if(Array.isArray(val)) { //array of elements
+            Array.prototype.push.apply(values,val);
+        }
+        else { //single elements
+           values.push(val); 
+        }
         var data = values.join('\0');
-        this.send_msg(MsgType.HARDWARE, data);
-    }
+        if(this.dbg_all || this.dbg_write){
+            this.log("virtualWrite: -> " + JSON.stringify(data));
+        }
+        this.send_msg(MsgType.HW, data);
+    };
+    
+    BlynkClientNode.prototype.setProperty = function(vpin, prop, val) {
+        var values = [vpin, prop];
+         if(Array.isArray(val)) { //array of elements
+           Array.prototype.push.apply(values,val);
+        }
+        else { //single elements
+           values.push(val); 
+        }
+        var data = values.join('\0');
+        if(this.dbg_all  || this.dbg_prop){
+            this.log("setProperty -> " + JSON.stringify(data));
+        }
+        this.send_msg(MsgType.PROPERTY, data);
+    };
 
     BlynkClientNode.prototype.sendEmail = function(to, subject, message) {
         var values = [to, subject, message];
         var data = values.join('\0');
+        if(this.dbg_all || this.dbg_mail){
+            this.log("sendEmail -> " + JSON.stringify(data));
+        }
         this.send_msg(MsgType.EMAIL, data);
-    }
+    };
+    
+    BlynkClientNode.prototype.sendNotify = function(message) {
+        if(this.dbg_all || this.dbg_notify){
+            this.log("sendNotify -> " + JSON.stringify(message));
+        }
+        this.send_msg(MsgType.NOTIFY, message);
+    };
 
 
     BlynkClientNode.prototype.handleWriteEvent = function(command) {
@@ -305,14 +398,14 @@ module.exports = function(RED) {
                 this._inputNodes[i].send(msg);
             }
         }
-    }
+    };
 
     BlynkClientNode.prototype.handleReadEvent = function(command) {
 
         for (var i = 0; i < this._inputNodes.length; i++) {
             if (this._inputNodes[i].nodeType == 'read' && this._inputNodes[i].pin == command.pin) {
                 var msg;
-
+                    
                 msg = {
                     payload: this._inputNodes[i].pin
                 };
@@ -320,7 +413,7 @@ module.exports = function(RED) {
                 this._inputNodes[i].send(msg);
             }
         }
-    }
+    };
 
     function BlynkInReadNode(n) {
         RED.nodes.createNode(this, n);
@@ -345,7 +438,7 @@ module.exports = function(RED) {
                 node.status({
                     fill: "green",
                     shape: "dot",
-                    text: "connected " + n
+                    text: "connected to pin V" + node.pin
                 });
             });
             this.serverConfig.on('erro', function() {
@@ -397,7 +490,7 @@ module.exports = function(RED) {
                 node.status({
                     fill: "green",
                     shape: "dot",
-                    text: "connected " + n
+                    text: "connected to pin V" + node.pin
                 });
             });
             this.serverConfig.on('erro', function() {
@@ -447,7 +540,7 @@ module.exports = function(RED) {
                 node.status({
                     fill: "green",
                     shape: "dot",
-                    text: "connected " + n
+                    text: "connected to pin V" + node.pin
                 });
             });
             this.serverConfig.on('erro', function() {
@@ -497,7 +590,7 @@ module.exports = function(RED) {
                 node.status({
                     fill: "green",
                     shape: "dot",
-                    text: "connected " + n
+                    text: "connected" + n
                 });
             });
             this.serverConfig.on('erro', function() {
@@ -525,5 +618,246 @@ module.exports = function(RED) {
     }
     RED.nodes.registerType("blynk-websockets-out-email", BlynkOutEmailNode);
 
+    function BlynkOutSetPropertyNode(n) {
+        RED.nodes.createNode(this, n);
+        var node = this;
+        this.server = n.client;
+        this.pin = n.pin;
+        this.prop = n.prop;
+        
+        this.serverConfig = RED.nodes.getNode(this.server);
+        if (!this.serverConfig) {
+            this.error(RED._("websocket.errors.missing-conf"));
+        } else {
+            // TODO: nls
+            this.serverConfig.on('opened', function(n) {
+                node.status({
+                    fill: "yellow",
+                    shape: "dot",
+                    text: "connecting " + n
+                });
+            });
+            this.serverConfig.on('connected', function(n) {
+                node.status({
+                    fill: "green",
+                    shape: "dot",
+                    text: "connected to pin V" + node.pin
+                });
+            });
+            this.serverConfig.on('erro', function() {
+                node.status({
+                    fill: "red",
+                    shape: "ring",
+                    text: "error"
+                });
+            });
+            this.serverConfig.on('closed', function() {
+                node.status({
+                    fill: "red",
+                    shape: "ring",
+                    text: "disconnected"
+                });
+            });
+        }
+        this.on("input", function(msg) {
+            if (msg.hasOwnProperty("payload") && node.serverConfig && node.serverConfig.logged) {
+                var payload = msg.payload; //dont check if is a string
+                var subject = msg.topic ? msg.topic : payload;
+                var prop = node.prop;
+                if (msg.hasOwnProperty("prop") && node.serverConfig && node.serverConfig.logged) {
+                    prop = Buffer.isBuffer(msg.prop) ? msg.prop : RED.util.ensureString(msg.prop);
+                }
+                if(prop!='bycode'){ //single propery
+                  node.serverConfig.setProperty(node.pin, prop, payload); 
+                }
+                else { //multiple property
+                    //all widget
+                    if (msg.hasOwnProperty("label") && node.serverConfig && node.serverConfig.logged) {
+                        var label = Buffer.isBuffer(msg.label) ? msg.label : RED.util.ensureString(msg.label);
+                        node.serverConfig.setProperty(node.pin, 'label', label);
+                    }
+                    if (msg.hasOwnProperty("color") && node.serverConfig && node.serverConfig.logged) {
+                        var color = Buffer.isBuffer(msg.color) ? msg.color : RED.util.ensureString(msg.color);
+                        node.serverConfig.setProperty(node.pin, 'color', color);
+                    }
+                    if (msg.hasOwnProperty("min") && node.serverConfig && node.serverConfig.logged) {
+                        var min = Buffer.isBuffer(msg.min) ? msg.min : RED.util.ensureString(msg.min);
+                        node.serverConfig.setProperty(node.pin, 'min', min);
+                    }
+                    if (msg.hasOwnProperty("max") && node.serverConfig && node.serverConfig.logged) {
+                        var max = Buffer.isBuffer(msg.max) ? msg.max : RED.util.ensureString(msg.max);
+                        node.serverConfig.setProperty(node.pin, 'max', max);
+                    }
+                    //buttons
+                    if ((msg.hasOwnProperty("onlabel") || msg.hasOwnProperty("offlabel")) && node.serverConfig && node.serverConfig.logged) {
+                        if (msg.hasOwnProperty("onlabel")){
+                            var onlabel = Buffer.isBuffer(msg.onlabel) ? msg.onlabel : RED.util.ensureString(msg.onlabel);
+                            node.serverConfig.setProperty(node.pin, 'onLabel', onlabel);
+                        }
+                        if (msg.hasOwnProperty("offlabel")){
+                            var offlabel = Buffer.isBuffer(msg.offlabel) ? msg.offlabel : RED.util.ensureString(msg.offlabel);
+                            node.serverConfig.setProperty(node.pin, 'offLabel', offlabel);
+                        }
+                    }
+                    //menu
+                    else if (msg.hasOwnProperty("labels") && node.serverConfig && node.serverConfig.logged) {
+                        node.serverConfig.setProperty(node.pin, 'labels', msg.labels);
+                    }
+                    //music player
+                    else if (msg.hasOwnProperty("isOnPlay") && node.serverConfig && node.serverConfig.logged) {
+                        var isonplay = false;
+                        if (msg.isonplay) isonplay = true;
+                        node.serverConfig.setProperty(node.pin, 'isonplay', isonplay);
+                    }
+            
+                  
+                }
+            }
+        });
+    }
+    RED.nodes.registerType("blynk-websockets-out-set-property", BlynkOutSetPropertyNode);
 
-}
+    /* LCD Widget*/
+    function BlynkOutLCDNode(n) {
+        RED.nodes.createNode(this, n);
+        var node = this;
+        this.server = n.client;
+        this.pin = n.pin;
+
+        this.serverConfig = RED.nodes.getNode(this.server);
+        if (!this.serverConfig) {
+            this.error(RED._("websocket.errors.missing-conf"));
+        } else {
+            // TODO: nls
+            this.serverConfig.on('opened', function(n) {
+                node.status({
+                    fill: "yellow",
+                    shape: "dot",
+                    text: "connecting " + n
+                });
+            });
+            this.serverConfig.on('connected', function(n) {
+                node.status({
+                    fill: "green",
+                    shape: "dot",
+                    text: "connected to pin V" + node.pin
+                });
+            });
+            this.serverConfig.on('erro', function() {
+                node.status({
+                    fill: "red",
+                    shape: "ring",
+                    text: "error"
+                });
+            });
+            this.serverConfig.on('closed', function() {
+                node.status({
+                    fill: "red",
+                    shape: "ring",
+                    text: "disconnected"
+                });
+            });
+        }
+        this.on("input", function(msg) {
+            if (msg.hasOwnProperty("payload") && node.serverConfig && node.serverConfig.logged) {
+                var payload = Buffer.isBuffer(msg.payload) ? msg.payload : RED.util.ensureString(msg.payload);
+                var subject = msg.topic ? msg.topic : payload;
+                if (msg.hasOwnProperty("clear") && msg.clear == true) {
+                  node.serverConfig.virtualWrite(node.pin, 'clr');
+                }
+                if (msg.hasOwnProperty("text")) {
+                  var text = Buffer.isBuffer(msg.text) ? msg.text : RED.util.ensureString(msg.text);
+                  
+                  var x=0;
+                  if (msg.hasOwnProperty("x")) {
+                      if(msg.x<0) x=0;
+                      else if(msg.x>15) x=15;
+                      else x=msg.x; 
+                  }
+                  
+                  var y=0;
+                  if (msg.hasOwnProperty("y")) {
+                      if(msg.y<0) y=0;
+                      else if(msg.y>1) y=1;
+                      else y=msg.y;  
+                  }
+                  
+                  var rawdata = ['p', x, y, text];
+                  node.serverConfig.virtualWrite(node.pin, rawdata);
+                }
+                
+                if (msg.hasOwnProperty("text1")) {
+                  var text = Buffer.isBuffer(msg.text1) ? msg.text : RED.util.ensureString(msg.text1);
+                  
+                  var x=0;
+                  if (msg.hasOwnProperty("x1")) {
+                      if(msg.x1<0) x=0;
+                      else if(msg.x1>15) x=15;
+                      else x=msg.x1; 
+                  }
+                  
+                  var y=1;
+                  if (msg.hasOwnProperty("y1")) {
+                      if(msg.y1<0) y=0;
+                      else if(msg.y1>1) y=1;
+                      else y=msg.y1;  
+                  }
+                  
+                  var rawdata = ['p', x, y, text];
+                  node.serverConfig.virtualWrite(node.pin, rawdata);
+                }
+            }
+        });
+    }
+    RED.nodes.registerType("blynk-websockets-out-lcd", BlynkOutLCDNode);    
+    
+    function BlynkOutNotifyNode(n) {
+        RED.nodes.createNode(this, n);
+        var node = this;
+        this.server = n.client;
+
+        this.serverConfig = RED.nodes.getNode(this.server);
+        if (!this.serverConfig) {
+            this.error(RED._("websocket.errors.missing-conf"));
+        } else {
+            // TODO: nls
+            this.serverConfig.on('opened', function(n) {
+                node.status({
+                    fill: "yellow",
+                    shape: "dot",
+                    text: "connecting " + n
+                });
+            });
+            this.serverConfig.on('connected', function(n) {
+                node.status({
+                    fill: "green",
+                    shape: "dot",
+                    text: "connected" + n
+                });
+            });
+            this.serverConfig.on('erro', function() {
+                node.status({
+                    fill: "red",
+                    shape: "ring",
+                    text: "error"
+                });
+            });
+            this.serverConfig.on('closed', function() {
+                node.status({
+                    fill: "red",
+                    shape: "ring",
+                    text: "disconnected"
+                });
+            });
+        }
+        this.on("input", function(msg) {
+            if (msg.hasOwnProperty("payload") && node.serverConfig && node.serverConfig.logged) {
+                var payload = Buffer.isBuffer(msg.payload) ? msg.payload : RED.util.ensureString(msg.payload);
+                node.serverConfig.sendNotify(payload);
+            }
+        });
+    }
+    RED.nodes.registerType("blynk-websockets-out-notify", BlynkOutNotifyNode);
+
+
+};
