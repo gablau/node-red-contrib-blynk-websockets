@@ -21,69 +21,77 @@ module.exports = function(RED) {
 
     //BLYNK STUFF
     function messageToDebugString(bufArray) {
-        var dataview = new DataView(bufArray);
-        var cmdString = getStringByCommandCode(dataview.getInt8(0));
-        var msgId = dataview.getUint16(1);
-        var responseCode = getStatusByCode(dataview.getUint16(3));
-        return "Command : " + cmdString + ", msgId : " + msgId + ", responseCode : " + responseCode;
+        var cmd = decodeCommand(bufArray);
+        if (cmd.type === MsgType.HW || cmd.type === MsgType.INTERNAL) {
+            return "Cmd: " + cmd.typeString + ", Id: " + cmd.msgId + ", len: " + cmd.len + ", data: " + printData(cmd.body);
+        }
+        else
+            return "Cmd: " + cmd.typeString + ", Id: " + cmd.msgId + ", responseCode: " + getStatusByCode(cmd.len);
     }
+    
 
     function decodeCommand(bufArray) {
         var dataview = new DataView(bufArray);
-        var command = {};
-        command.type = dataview.getInt8(0);
-        command.typeString = getStringByCommandCode(dataview.getInt8(0));
-        command.msgId = dataview.getUint16(1);
+        var cmd = {};
+        cmd.type = dataview.getInt8(0);
+        cmd.typeString = getCommandByCode(dataview.getInt8(0));
+        cmd.msgId = dataview.getUint16(1);
+        cmd.len = dataview.getUint16(3);
 
-        if (command.type == MsgType.HW) {
-            command.len = dataview.getUint16(3);;
+        if (cmd.type === MsgType.HW) {
+            cmd.len = dataview.getUint16(3);
 
-            command.body = '';
-            for (var i = 0, offset = 5; i < command.len; i++, offset++) {
-                command.body += String.fromCharCode(dataview.getInt8(offset));
+            cmd.body = '';
+            for (var i = 0, offset = 5; i < cmd.len; i++, offset++) {
+                cmd.body += String.fromCharCode(dataview.getInt8(offset));
             }
-            if (command.body != '') {
-                var values = command.body.split('\0');
+            if (cmd.body != '') {
+                var values = cmd.body.split('\0');
                 if (values.length > 1) {
-                    command.operation = values[0];
-                    command.pin = values[1];
+                    cmd.operation = values[0];
+                    cmd.pin = values[1];
                     if (values.length > 2) {
-                        command.value = values[2];
-                        //we have an array of commands, return array as well
-                        command.array = values.slice(2, values.length);
+                        cmd.value = values[2];
+                        //we have an array of cmds, return array as well
+                        cmd.array = values.slice(2, values.length);
                     }
 
                 }
             }
-        } else {
-            command.status = dataview.getUint16(3);
-        }
-
-        return command;
-    }
-
-    function encodeCommand(command, msgId, body) {
-        var BLYNK_HEADER_SIZE = 5;
-        var bodyLength = (body ? body.length : 0);
-        var bufArray = new Buffer(BLYNK_HEADER_SIZE + bodyLength);
-        var dataview = new DataView(bufArray);
-        dataview.setInt8(0, command);
-        dataview.setInt16(1, msgId);
-        dataview.setInt16(3, bodyLength);
-        if (bodyLength > 0) {
-            //todo optimize. should be better way
-            var buf = new ArrayBuffer(bodyLength); // 2 bytes for each char
-            var bufView = new Uint8Array(buf);
-            for (var i = 0, offset = 5; i < body.length; i++, offset += 1) {
-                dataview.setInt8(offset, body.charCodeAt(i));
+        } else if (cmd.type === MsgType.INTERNAL) {
+            cmd.body = '';
+            for (var i = 0, offset = 5; i < cmd.len; i++, offset++) {
+                cmd.body += String.fromCharCode(dataview.getInt8(offset));
             }
+        } else {
+            cmd.status = dataview.getUint16(3);
         }
-        return new Uint8Array(bufArray);
+
+        return cmd;
     }
+    
+    function blynkHeader(msg_type, msg_id, msg_len) {
+        return String.fromCharCode(
+            msg_type,
+            msg_id  >> 8, msg_id  & 0xFF,
+            msg_len >> 8, msg_len & 0xFF
+        );
+    }
+    
+    function printData(data){
+      var data = data + "" ;
+      return JSON.stringify(data);  
+    }
+
+    
+    var BLYNK_VERSION = "0.4.7"; //blynk library version
+    var BLYNK_HEARTBEAT = 10; //seconds
 
 
     var MsgType = {
         RSP           :  0,
+        
+        //app commands
         REGISTER      :  1, //"mail pass"
         LOGIN         :  2, //"token" or "mail pass"
         SAVE_PROF     :  3,
@@ -96,55 +104,102 @@ module.exports = function(RED) {
         GET_GRAPH_DATA : 10,
         GET_GRAPH_DATA_RESPONSE : 11,
         
+         //HARDWARE commands
         TWEET         :  12,
         EMAIL         :  13,
         NOTIFY        :  14,
         BRIDGE        :  15,
         HW_SYNC       :  16,
-        INTERNAL      :  17,
+        INTERNAL      :  17, //0x11
         SMS           :  18,
         PROPERTY      :  19,
-        HW            :  20,
-        CREATE_DASH   :  21,
+        HW            :  20, //0x14
         
-        SAVE_DASH     :  22,
-        DELETE_DASH   :  23,
-        LOAD_PROF_GZ  :  24,
-        SYNC          :  25,
-        SHARING       :  26,
-        ADD_PUSH_TOKEN : 27,
+        //app commands
+        CREATE_DASH         : 21,
+        UPDATE_DASH         : 22,
+        DELETE_DASH         : 23,
+        LOAD_PROF_GZ        : 24,
+        APP_SYNC            : 25,
+        SHARING             : 26,
+        ADD_PUSH_TOKEN      : 27,
+        EXPORT_GRAPH_DATA   : 28,
 
-        //sharing commands
+        //app sharing commands
         GET_SHARED_DASH     : 29,
         GET_SHARE_TOKEN     : 30,
         REFRESH_SHARE_TOKEN : 31,
         SHARE_LOGIN         : 32,
-      
-        REDIRECT      :  41,
-        DEBUG_PRINT   :  55
+        
+         //app commands
+        CREATE_WIDGET       : 33,
+        UPDATE_WIDGET       : 34,
+        DELETE_WIDGET       : 35,
+
+        //energy commands
+        GET_ENERGY          : 36,
+        ADD_ENERGY          : 37,
+
+        UPDATE_PROJECT_SETTINGS : 38,
+
+        GET_SERVER          : 40,
+        CONNECT_REDIRECT    : 41,
+
+        CREATE_DEVICE       : 42,
+        UPDATE_DEVICE       : 43,
+        DELETE_DEVICE       : 44,
+        GET_DEVICES         : 45,
+
+        CREATE_TAG          : 46,
+        UPDATE_TAG          : 47,
+        DELETE_TAG          : 48,
+        GET_TAGS            : 49,
+
+        APP_CONNECTED       : 50,
+
+        //web sockets
+        WEB_SOCKETS         : 52,
+
+        EVENTOR             : 53,
+        WEB_HOOKS           : 54,
+
+        DEBUG_PRINT         : 55
     };
     
 
 
     var MsgStatus = {
-        OK: 200,
-        QUOTA_LIMIT_EXCEPTION : 1,
-        ILLEGAL_COMMAND: 2,
-        NOT_REGISTERED : 3,
-        ALREADY_REGISTERED    :  4,
-        NOT_AUTHENTICATED      : 5,
-        NOT_ALLOWED            : 6,
-        DEVICE_NOT_IN_NETWORK : 7,
-        NO_ACTIVE_DASHBOARD: 8, // to delete?? not in JS library
-        INVALID_TOKEN: 9,
-        ILLEGAL_COMMAND_BODY: 11 //to delete ?? not in JS library
+        OK                          : 200,
+        QUOTA_LIMIT_EXCEPTION       : 1,
+        ILLEGAL_COMMAND             : 2,
+        NOT_REGISTERED              : 3,
+        ALREADY_REGISTERED          : 4,
+        NOT_AUTHENTICATED           : 5,
+        NOT_ALLOWED                 : 6,
+        DEVICE_NOT_IN_NETWORK       : 7,
+        NO_ACTIVE_DASHBOARD         : 8, 
+        INVALID_TOKEN               : 9,
+        ILLEGAL_COMMAND_BODY        : 11, 
+        GET_GRAPH_DATA_EXCEPTION    : 12,
+        NO_DATA_EXCEPTION           : 17,
+        DEVICE_WENT_OFFLINE         : 18,
+        SERVER_EXCEPTION            : 19,
+
+        NTF_INVALID_BODY            : 13,
+        NTF_NOT_AUTHORIZED          : 14,
+        NTF_ECXEPTION               : 15,
+
+        TIMEOUT                     : 16,
+
+        NOT_SUPPORTED_VERSION       : 20,
+        ENERGY_LIMIT                : 21
     };
     
     function getKeyByValue(object, value) {
         return Object.keys(object).find(key => object[key] === value);
     }
     
-    function getStringByCommandCode(cmd) {
+    function getCommandByCode(cmd) {
         var key = getKeyByValue(MsgType, cmd);
         if(key !== undefined ) return key;
         else return cmd;
@@ -163,8 +218,6 @@ module.exports = function(RED) {
     function BlynkClientNode(n) {
         // Create a RED node
         RED.nodes.createNode(this, n);
-       // var node = this;
-        this.msg_callbacks = [];
         // Store local copies of the node configuration (as defined in the .html)
         this.path = n.path;
         this.key = n.key;
@@ -174,21 +227,23 @@ module.exports = function(RED) {
         this.dbg_notify = n.dbg_notify;
         this.dbg_mail = n.dbg_mail;
         this.dbg_prop = n.dbg_prop;
+        this.dbg_low = n.dbg_low;
 
         this._inputNodes = []; // collection of nodes that want to receive events
         this._clients = {};
         // match absolute url
         this.closing = false;
         this.logged = false;
+        this.msg_id = 1;
 
         this.setMaxListeners(100);
 
         this.pinger = setInterval(function() {
             //only ping if connected and working
-            if (this.logged) {
-                this.ping();
+            if (node.logged) {
+                node.ping();
             }
-        }, 5000);
+        }, BLYNK_HEARTBEAT * 1000);
 
         this.closing = false;
         
@@ -228,19 +283,31 @@ module.exports = function(RED) {
                 }
             });
 
-            socket.on('message', function(data, flags) {
-                //node.log(RED._("RCV: ") + messageToDebugString(data));
+            socket.on('message', function (data, flags) {
+                if (node.dbg_low) {
+                    node.log("RECV <- " + messageToDebugString(data));
+                    //node.log("RECV RAW <- " + printData(data));
+                }
                 var cmd = decodeCommand(data);
-                if (cmd.type == MsgType.RSP && cmd.msgId && cmd.msgId <= node.msg_callbacks.length) {
-                    var err = null
-                    if (cmd.status != MsgStatus.OK) {
-                        err = cmd.status;
+                if (!node.logged) {
+                    if (cmd.type === MsgType.RSP && cmd.msgId === 1) {
+                        if (cmd.len === MsgStatus.OK || cmd.len === MsgStatus.ALREADY_REGISTERED) {
+                            node.log("Client logged");
+                            node.logged = true;
+                            node.emit('connected', '');
+                            node.sendMsg(MsgType.INTERNAL, ['ver', BLYNK_VERSION, 'h-beat', BLYNK_HEARTBEAT, 'dev', 'node-red', 'conn', 'Socket']);
+                        }
                     }
-                    node.msg_callbacks[cmd.msgId - 1](cmd, err);
-                    node.msg_callbacks.splice(cmd.msgId - 1, 1);
                 } else {
+                    /*if (cmd.type == MsgType.RSP && cmd.msgId && cmd.msgId <= node.msg_callbacks.length) {
+                        var err = null
+                        if (cmd.status != MsgStatus.OK) {
+                            err = cmd.status;
+                        }
+                     } else {*/
                     switch (cmd.type) {
                         case MsgType.HW:
+                            //case MsgType.BRIDGE:
                             switch (cmd.operation) {
                                 //input nodes
                                 case 'vw':
@@ -250,16 +317,50 @@ module.exports = function(RED) {
                                     node.handleReadEvent(cmd);
                                     break;
                                 default:
-                                    node.warn(RED._("Unhandled HARDWARE operation: ") + messageToDebugString(data));
+                                    node.warn(RED._("Invalid HW cmd: ") + messageToDebugString(data));
+                                    node.sendRsp(MsgType.RSP, node.msg_id, MsgStatus.ILLEGAL_COMMAND);
                             }
                             break;
                         case MsgType.RSP:
-                            if(cmd.status != MsgStatus.OK ){  
+                            if (cmd.status !== MsgStatus.OK) {
                                 node.warn(RED._("Unhandled RSP type: ") + messageToDebugString(data));
                             }
                             break;
+                        case MsgType.LOGIN:
+                        case MsgType.PING:
+                            node.sendRsp(MsgType.RSP, node.msg_id, MsgStatus.OK);
+                            break;
+                        case MsgType.INTERNAL:
+                            switch (cmd.body) {
+                                //app event node
+                                case 'acon':
+                                case 'adis':
+                                    node.handleAppEvent(cmd.body);
+                                    break;
+                                default:
+                                    node.warn(RED._("Invalid INTERNAL cmd: ") + messageToDebugString(data));
+                                    //node.sendRsp(MsgType.RSP, node.msg_id, MsgStatus.ILLEGAL_COMMAND);
+                            }
+                            break;
+                        case MsgType.GET_TOKEN:
+                            node.sendRsp(MsgType.GET_TOKEN, node.msg_id, node.key.length, node.key);
+                            break;
+                        case MsgType.LOAD_PROF:
+                            //node.sendRsp(MsgType.LOAD_PROF, node.msg_id, profile.length, self.profile);
+                            break;
+                        case MsgType.DEBUG_PRINT:
+                            node.log("Server: " + cmd.operation);
+                            break;
+                        case MsgType.REGISTER:
+                        case MsgType.SAVE_PROF:
+                        case MsgType.ACTIVATE:
+                        case MsgType.DEACTIVATE:
+                        case MsgType.REFRESH:
+                            // skip this message types
+                            break;
                         default:
-                            node.warn(RED._("Unhandled operation type: ") + messageToDebugString(data));
+                            node.warn(RED._("Invalid msg type: ") + messageToDebugString(data));
+                            node.sendRsp(MsgType.RSP, node.msg_id, MsgStatus.ILLEGAL_COMMAND);
                     }
                 }
             });
@@ -293,92 +394,89 @@ module.exports = function(RED) {
 
     RED.nodes.registerType("blynk-websockets-client", BlynkClientNode);
 
-    BlynkClientNode.prototype.registerInputNode = function( /*Node*/ handler) {
+    BlynkClientNode.prototype.registerInputNode = function (handler) {
         this.log("Register input node" + " - type: " + handler.nodeType + " pin: " + handler.pin);
         this._inputNodes.push(handler);
     };
 
-    BlynkClientNode.prototype.removeInputNode = function( /*Node*/ handler) {
+    BlynkClientNode.prototype.removeInputNode = function (handler) {
         this.log("Remove input node" + " - type: " + handler.nodeType + " pin: " + handler.pin);
-        this._inputNodes.forEach(function(node, i, inputNodes) {
+        this._inputNodes.forEach(function (node, i, inputNodes) {
             if (node === handler) {
                 inputNodes.splice(i, 1);
             }
         });
     };
-
-    BlynkClientNode.prototype.send_msg = function(command, data, callback) {
-        var id = 0;
-        if (callback) {
-            id = this.msg_callbacks.push(callback);
+    
+    BlynkClientNode.prototype.sendRsp = function (msg_type, msg_id, msg_len, data) {
+        var self = this;
+        data = data || "";
+        msg_id = msg_id || (self.msg_id++);
+        if (msg_type === MsgType.RSP) {
+            data = blynkHeader(msg_type, msg_id, msg_len)
+            if (this.dbg_low) {
+                this.log("SEND -> Cmd: " + getCommandByCode(msg_type) + " Id: " + msg_id + " Status: " + getStatusByCode(msg_len));
+            }
+        } else {
+            data = blynkHeader(msg_type, msg_id, msg_len) + data;
+            if (this.dbg_low) {
+                this.log("SEND -> Cmd: " + getCommandByCode(msg_type) + " Id: " + msg_id + " Data: " + printData(data));
+            }
         }
-        this.server.send(encodeCommand(command, id, data));
+        //convert to Uint8Array
+        var rawdata = new Uint8Array(data.length);
+        for (var i = 0, j = data.length; i < j; ++i) {
+            rawdata[i] = data.charCodeAt(i);
+        }
+        this.server.send(rawdata);
     };
+    
+    BlynkClientNode.prototype.sendMsg = function(msg_type, values, msg_id) {
+        var values = values || [''];
+        var data = values.join('\0');
+        this.sendRsp(msg_type, msg_id, data.length, data);
+      };
 
     BlynkClientNode.prototype.login = function(token) {
         if(this.dbg_all){
             this.log("login -> " + token);
         }
-        this.send_msg(MsgType.LOGIN, token, function(cmd, err) {
-            this.log("Client logged");
-            if (!err) {
-                this.logged = true;
-                this.emit('connected', '');
-            }
-        }.bind(this));
+        this.sendRsp(MsgType.LOGIN, 1, token.length, token);
     };
 
     BlynkClientNode.prototype.ping = function() {
-        if(this.dbg_all){
+        if(this.dbg_all || this.dbg_read){
             this.log("ping");
         }
-        this.send_msg(MsgType.PING, '', function(cmd, err) {});
+      this.sendMsg(MsgType.PING);
     };
 
     BlynkClientNode.prototype.virtualWrite = function(vpin, val) {
-        var values = ['vw', vpin];
-        if(Array.isArray(val)) { //array of elements
-            Array.prototype.push.apply(values,val);
-        }
-        else { //single elements
-           values.push(val); 
-        }
-        var data = values.join('\0');
         if(this.dbg_all || this.dbg_write){
-            this.log("virtualWrite: -> " + JSON.stringify(data));
+            this.log("virtualWrite: -> " + JSON.stringify(['vw', vpin].concat(val)));
         }
-        this.send_msg(MsgType.HW, data);
+        this.sendMsg(MsgType.HW, ['vw', vpin].concat(val));
     };
     
     BlynkClientNode.prototype.setProperty = function(vpin, prop, val) {
-        var values = [vpin, prop];
-         if(Array.isArray(val)) { //array of elements
-           Array.prototype.push.apply(values,val);
-        }
-        else { //single elements
-           values.push(val); 
-        }
-        var data = values.join('\0');
         if(this.dbg_all  || this.dbg_prop){
-            this.log("setProperty -> " + JSON.stringify(data));
+            this.log("setProperty -> " + JSON.stringify([vpin, prop].concat(val)));
         }
-        this.send_msg(MsgType.PROPERTY, data);
+        this.sendMsg(MsgType.PROPERTY, [vpin, prop].concat(val));
     };
 
     BlynkClientNode.prototype.sendEmail = function(to, subject, message) {
-        var values = [to, subject, message];
-        var data = values.join('\0');
         if(this.dbg_all || this.dbg_mail){
-            this.log("sendEmail -> " + JSON.stringify(data));
+            this.log("sendEmail -> " + JSON.stringify([to, subject, message]));
         }
-        this.send_msg(MsgType.EMAIL, data);
+        this.sendMsg(MsgType.EMAIL, [to, subject, message]);
     };
     
     BlynkClientNode.prototype.sendNotify = function(message) {
         if(this.dbg_all || this.dbg_notify){
-            this.log("sendNotify -> " + JSON.stringify(message));
+            this.log("sendNotify -> " + JSON.stringify([message]));
         }
-        this.send_msg(MsgType.NOTIFY, message);
+        this.sendMsg(MsgType.NOTIFY, [message]);
     };
 
 
@@ -408,6 +506,20 @@ module.exports = function(RED) {
                     
                 msg = {
                     payload: this._inputNodes[i].pin
+                };
+
+                this._inputNodes[i].send(msg);
+            }
+        }
+    };
+    
+    BlynkClientNode.prototype.handleAppEvent = function(command) {
+        for (var i = 0; i < this._inputNodes.length; i++) {
+            if (this._inputNodes[i].nodeType == 'app') {
+                var msg;
+
+                msg = {
+                    payload: command
                 };
 
                 this._inputNodes[i].send(msg);
@@ -517,7 +629,57 @@ module.exports = function(RED) {
 
     }
     RED.nodes.registerType("blynk-websockets-in-write", BlynkInWriteNode);
+    
+    function BlynkInAppNode(n) {
+        RED.nodes.createNode(this, n);
+        this.server = (n.client) ? n.client : n.server;
+        var node = this;
+        this.serverConfig = RED.nodes.getNode(this.server);
 
+        this.nodeType = 'app';
+
+        if (this.serverConfig) {
+            this.serverConfig.registerInputNode(this);
+            // TODO: nls
+            this.serverConfig.on('opened', function(n) {
+                node.status({
+                    fill: "yellow",
+                    shape: "dot",
+                    text: "connecting " + n
+                });
+            });
+            this.serverConfig.on('connected', function(n) {
+                node.status({
+                    fill: "green",
+                    shape: "dot",
+                    text: "connected "
+                });
+            });
+            this.serverConfig.on('erro', function() {
+                node.status({
+                    fill: "red",
+                    shape: "ring",
+                    text: "error"
+                });
+            });
+            this.serverConfig.on('closed', function() {
+                node.status({
+                    fill: "red",
+                    shape: "ring",
+                    text: "disconnected"
+                });
+            });
+        } else {
+            this.error(RED._("websocket.errors.missing-conf"));
+        }
+
+        this.on('close', function() {
+            node.serverConfig.removeInputNode(node);
+        });
+
+    }
+    RED.nodes.registerType("blynk-websockets-in-app", BlynkInAppNode);
+    
     function BlynkOutWriteNode(n) {
         RED.nodes.createNode(this, n);
         var node = this;

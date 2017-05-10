@@ -18,6 +18,7 @@ Supports both SSL wss:// and non secured ws:// connection to local server and cl
 
 - read event
 - write event
+- app event
 - write command
 - set property
 - emails

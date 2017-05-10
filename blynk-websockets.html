@@ -33,33 +33,36 @@
     function ws_label() {
         _pin = 'no pin';
         _type = '';
-        if(this.type == 'blynk-websockets-in-read') {
+        if(this.type === 'blynk-websockets-in-read') {
 	        _type = 'Read Event';
         } 
-        if(this.type == 'blynk-websockets-in-write') {
+        if(this.type === 'blynk-websockets-in-write') {
 	        _type = 'Write Event';
         } 
-        if(this.type == 'blynk-websockets-out-write') {
+        if(this.type === 'blynk-websockets-out-write') {
 	        _type = 'Write';
         } 
-        if(this.type == 'blynk-websockets-out-set-property') {
+        if(this.type === 'blynk-websockets-out-set-property') {
 	        _type = 'Set Property';
         } 
-        if(this.type == 'blynk-websockets-out-lcd') {
+        if(this.type === 'blynk-websockets-out-lcd') {
 	        _type = 'LCD';
         } 
         if(this.pin) {
 	        _pin ='Pin V'+ this.pin + ' - ' +  _type;
         }
-        if(this.type == "blynk-websockets-out-email") {
+        if(this.type === "blynk-websockets-out-email") {
 	        return this.name||this.email||'email';
         }
-        if(this.type == "blynk-websockets-out-notify") {
+        if(this.type === "blynk-websockets-out-notify") {
 	        return this.name||'notify';
         }
-        if(this.type == "blynk-websockets-client") {
+        if(this.type === "blynk-websockets-client") {
 	        return this.name||this.key||'n/a';
         }
+        if(this.type === 'blynk-websockets-in-app') {
+	        return this.name||'App Event';
+        } 
         return this.name||_pin;
     }
        
@@ -85,7 +88,8 @@
             dbg_write: {value:false},
             dbg_notify: {value:false},
             dbg_mail: {value:false},
-            dbg_prop: {value:false}
+            dbg_prop: {value:false},
+            dbg_low: {value:false}
         },
         inputs:0,
         outputs:0,
@@ -118,6 +122,25 @@
         defaults: {
             name: {value: ''},
             pin: {value: 0},
+            client: {type:"blynk-websockets-client", validate: ws_validateclient}
+        },
+        color:"#1BC17C",
+        inputs:0,
+        outputs:1,
+        icon: "white-globe.png",
+        labelStyle: function() {
+            return this.name?"node_label_italic":"";
+        },
+        label: ws_label,
+        oneditsave: ws_oneditsave,
+        oneditprepare: ws_oneditprepare
+    });
+    
+    RED.nodes.registerType('blynk-websockets-in-app', {
+        category: 'blynk ws',
+        paletteLabel: 'app event',
+        defaults: {
+            name: {value: ''},
             client: {type:"blynk-websockets-client", validate: ws_validateclient}
         },
         color:"#1BC17C",
@@ -283,6 +306,25 @@
     <p>Blynk write event node.</p>
     <p><code>msg.payload</code> will contain the the value to write to the specified pin.</p>
     <p><code>msg.arrayOfValues</code> will contain an array of values sent, useful for Widgets that have the MERGE ability.</p>
+</script>
+
+<!-- Blynk Input Node - App -->
+<script type="text/x-red" data-template-name="blynk-websockets-in-app">
+    <div class="form-row" id="websocket-client-row">
+        <label for="node-input-client"><i class="fa fa-bookmark"></i> <span>Connection</span></label>
+        <input type="text" id="node-input-client">
+    </div>
+    <div class="form-row">
+        <label for="node-input-name"><i class="fa fa-tag"></i> <span>Name</span></label>
+        <input type="text" id="node-input-name" placeholder="Name">
+    </div>
+</script>
+
+<script type="text/x-red" data-help-name="blynk-websockets-in-app">
+    <p>Blynk app event node.</p>
+    <p><code>msg.payload</code> will contain the the value app send.</p>
+    <p><code>'acon'</code> App connected.</p>
+    <p><code>'adis'</code> App disconnected.</p>
 </script>
 
 <!-- Blynk out Node - Write -->
@@ -480,6 +522,7 @@ where RR (red), GG (green) and BB (blue) are hexadecimal values between 00 and F
         <input type="checkbox" id="node-config-input-dbg_prop" value="all" style="display: inline-block; width: auto; vertical-align: top;"> Property</input>
         <input type="checkbox" id="node-config-input-dbg_notify" value="all" style="display: inline-block; width: auto; vertical-align: top;"> Notify</input>
         <input type="checkbox" id="node-config-input-dbg_mail" value="all" style="display: inline-block; width: auto; vertical-align: top;"> Mail</input>
+        <input type="checkbox" id="node-config-input-dbg_low" value="all" style="display: inline-block; width: auto; vertical-align: top;"> Low Level</input>
     </div>
     <div class="form-row">
         <label for="node-config-input-name"><i class="fa fa-tag"></i> <span>Name</span></label>
