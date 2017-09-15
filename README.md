@@ -2,10 +2,7 @@
 ### This project has been moved to  [node-red-contrib-blynk-ws](https://github.com/gablau/node-red-contrib-blynk-ws)
 ### [![NPM](https://nodei.co/npm/node-red-contrib-blynk-ws.png?mini=true)](https://npmjs.org/package/node-red-contrib-blynk-ws) [![npm version](https://badge.fury.io/js/node-red-contrib-blynk-ws.svg)](https://badge.fury.io/js/node-red-contrib-blynk-ws)
 ---
-#
-#
-#
-#
+
 # node-red-contrib-blynk-websockets
 Blynk app integration with Node Red using WebSockets protocol
 
